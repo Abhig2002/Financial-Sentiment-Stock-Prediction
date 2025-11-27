@@ -29,6 +29,7 @@ class SVM_RBF(SVM):
         C: float = 1.0,
         gamma: Union[str, float] = "scale",
         random_state: int = 42,
+        enable_progressive_training: bool = False,
     ):
         """
         Initialize the RBF-kernel SVM classifier with SentenceTransformer embeddings.
@@ -38,6 +39,7 @@ class SVM_RBF(SVM):
             C: Regularization parameter (higher = less regularization)
             gamma: Kernel coefficient ('scale', 'auto', or float value)
             random_state: Random seed for reproducibility
+            enable_progressive_training: Enable progressive training for graphs (slow!)
         """
         # Initialize parent class (gets encoder and sets up embedding pipeline)
         super().__init__(model_name=model_name, random_state=random_state)
@@ -49,11 +51,13 @@ class SVM_RBF(SVM):
             gamma=gamma,
             probability=False,  # Faster without probability estimates
             random_state=random_state,
+            cache_size=500,  # Increase cache for faster training
         )
 
         # Store hyperparameters for logging/debugging
         self.C = C
         self.gamma = gamma
+        self.enable_progressive_training = enable_progressive_training
         self._is_fitted = False
         self.training_history = {
             "epoch": [],
@@ -96,28 +100,31 @@ class SVM_RBF(SVM):
             y_val = self._ensure_binary(val_df["Truth"])
             print(f"Validation set: {len(val_df)} samples")
         
-        # Progressive training: train on increasing subsets
-        n_epochs = 10
-        for epoch in range(1, n_epochs + 1):
-            # Use progressively more training data
-            subset_size = int(len(X_train) * (epoch / n_epochs))
-            subset_size = max(subset_size, 100)  # Minimum 100 samples
-            
-            X_subset = X_train[:subset_size]
-            y_subset = y_train[:subset_size]
-            
-            # Train fresh model on subset
-            self.model = SVC(
-                kernel="rbf",
-                C=self.C,
-                gamma=self.gamma,
-                probability=False,
-                random_state=self.random_state,
-            )
-            self.model.fit(X_subset, y_subset)
-            
-            # Evaluate on validation set if provided
-            if val_df is not None:
+        # Progressive training (optional - slow for RBF!)
+        if self.enable_progressive_training and val_df is not None:
+            print("⚠️  Progressive training enabled (this will be slow!)")
+            n_epochs = 5  # Reduced from 10 for RBF
+            for epoch in range(1, n_epochs + 1):
+                # Use progressively more training data
+                subset_size = int(len(X_train) * (epoch / n_epochs))
+                subset_size = max(subset_size, 100)  # Minimum 100 samples
+                
+                X_subset = X_train[:subset_size]
+                y_subset = y_train[:subset_size]
+                
+                # Train fresh model on subset
+                print(f"Training on {subset_size} samples...")
+                self.model = SVC(
+                    kernel="rbf",
+                    C=self.C,
+                    gamma=self.gamma,
+                    probability=False,
+                    random_state=self.random_state,
+                    cache_size=500,
+                )
+                self.model.fit(X_subset, y_subset)
+                
+                # Evaluate on validation set
                 y_pred = self.model.predict(X_val)
                 
                 precision = precision_score(y_val, y_pred, zero_division=0)
@@ -129,16 +136,18 @@ class SVM_RBF(SVM):
                 self.training_history["recall"].append(recall)
                 self.training_history["f1"].append(f1)
                 
-                print(f"Epoch {epoch}/{n_epochs} ({subset_size} samples) - "
+                print(f"Epoch {epoch}/{n_epochs} - "
                       f"Val Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
         
         # Final training on full dataset
+        print("Training on full dataset...")
         self.model = SVC(
             kernel="rbf",
             C=self.C,
             gamma=self.gamma,
             probability=False,
             random_state=self.random_state,
+            cache_size=500,
         )
         self.model.fit(X_train, y_train)
         self._is_fitted = True

@@ -9,6 +9,7 @@ from lstm.lstm import LSTM
 from randomforest.randomforest import RandomForest
 from svm.svm import SVM
 from svm.svm_rbf import SVM_RBF
+from svm.svm_fuzzy import SVM_Fuzzy
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -27,6 +28,8 @@ def main(args):
         models.append(("svm", SVM))
     if pipeline == "svm_rbf" or pipeline == "all":
         models.append(("svm_rbf", SVM_RBF))
+    if pipeline == "svm_fuzzy" or pipeline == "all":
+        models.append(("svm_fuzzy", SVM_Fuzzy))
     if pipeline == "cnn" or pipeline == "all":
         models.append(("cnn", CNN))
     if pipeline == "lstm" or pipeline == "all":
@@ -71,7 +74,7 @@ def parse_args():
         "-p",
         "--pipeline",
         required=True,
-        choices=["svm", "svm_rbf", "cnn", "lstm", "randomforest", "all"],
+        choices=["svm", "svm_rbf", "svm_fuzzy", "cnn", "lstm", "randomforest", "all"],
         help="Select which pipeline to run.",
     )
 

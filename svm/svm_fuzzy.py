@@ -5,20 +5,49 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.svm import LinearSVC
 from sklearn.metrics import precision_score, recall_score, f1_score
-from sentence_transformers import SentenceTransformer
+from .svm import SVM
 
 
-class SVM:
+class SVM_Fuzzy(SVM):
     """
-    Binary (0/1) text classifier using SentenceTransformer embeddings + LinearSVC.
-    Expects dataframes with columns: 'Summary' (str), 'Truth' (0 or 1).
+    Fuzzy Support Vector Machine for binary (0/1) text classification.
+    
+    Implements Fuzzy Linear SVM by providing sample weights to LinearSVC.
+    Memberships are computed using distance from class centroids, making
+    the model more robust to noisy/outlier financial news.
+    
+    Reference:
+        Lin, C.-F., and Wang, S.-D., "Fuzzy Support Vector Machines,"
+        IEEE Transactions on Neural Networks, vol. 13, no. 2, 2002.
+    
+    Inherits from SVM class:
+        - SentenceTransformer embedding pipeline
+        - Label validation utilities
+    
+    Key difference:
+        - Assigns fuzzy membership weights to samples during training
+        - Reduces influence of outliers and noisy samples
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", random_state: int = 42):
-        self.encoder = SentenceTransformer(model_name)
-        self.random_state = random_state
-        # LinearSVC is fast and works well on dense embeddings.
-        self.model = LinearSVC(random_state=random_state, dual="auto")
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        min_membership: float = 0.1,
+        random_state: int = 42,
+    ):
+        """
+        Initialize the Fuzzy SVM classifier with SentenceTransformer embeddings.
+        
+        Args:
+            model_name: Name of the SentenceTransformer model for text embeddings
+            min_membership: Minimum membership value (prevents zero weights)
+            random_state: Random seed for reproducibility
+        """
+        # Initialize parent class (gets encoder and sets up embedding pipeline)
+        super().__init__(model_name=model_name, random_state=random_state)
+
+        # Store hyperparameters
+        self.min_membership = min_membership
         self._is_fitted = False
         self.training_history = {
             "epoch": [],
@@ -26,30 +55,61 @@ class SVM:
             "recall": [],
             "f1": [],
         }
+        self.memberships_ = None  # Store computed memberships for analysis
 
     @staticmethod
-    def _ensure_binary(y: pd.Series) -> np.ndarray:
-        y_arr = y.astype(int).to_numpy()
-        uniq = set(np.unique(y_arr).tolist())
-        if not uniq.issubset({0, 1}):
-            raise ValueError(
-                f"'Truth' must be binary 0/1. Found labels: {sorted(uniq)}"
-            )
-        return y_arr
+    def _compute_fuzzy_memberships(
+        X: np.ndarray, y: np.ndarray, min_membership: float = 0.1
+    ) -> np.ndarray:
+        """
+        Compute fuzzy membership values for each training sample.
+        
+        Membership is based on distance from class centroid:
+        - Samples close to their class center get higher membership (≈ 1.0)
+        - Samples far from their class center get lower membership (≈ min_membership)
+        - This downweights outliers/noisy samples
+        
+        Args:
+            X: Feature matrix (n_samples, n_features)
+            y: Labels (n_samples,)
+            min_membership: Minimum membership value (0 < min_membership ≤ 1)
+            
+        Returns:
+            Array of membership values (n_samples,)
+        """
+        # Separate samples by class
+        X0 = X[y == 0]
+        X1 = X[y == 1]
 
-    def _embed(self, texts: pd.Series) -> np.ndarray:
-        # normalize_embeddings=True often helps linear models on SBERT vectors
-        return self.encoder.encode(
-            texts.astype(str).tolist(),
-            show_progress_bar=False,
-            normalize_embeddings=True,
-        )
+        # Compute class centroids
+        mu0 = X0.mean(axis=0)
+        mu1 = X1.mean(axis=0)
+
+        # Compute distance from each sample to its class centroid
+        dists = np.zeros(len(y))
+        for i, label in enumerate(y):
+            center = mu0 if label == 0 else mu1
+            dists[i] = np.linalg.norm(X[i] - center)
+
+        # Normalize distances to [0, 1]
+        dmax = dists.max()
+        if dmax == 0:
+            # All samples at centroid (unlikely but handle it)
+            return np.ones_like(dists)
+
+        # Convert distance to membership: far = low membership
+        memberships = 1.0 - (dists / dmax)
+        
+        # Scale to [min_membership, 1.0]
+        memberships = min_membership + (1.0 - min_membership) * memberships
+        
+        return memberships
 
     def train(
         self, train_df: pd.DataFrame, val_df: Optional[pd.DataFrame] = None
     ) -> None:
         """
-        Train the Linear SVM classifier with progressive validation monitoring.
+        Train the Fuzzy SVM classifier with fuzzy membership weights.
         
         Args:
             train_df: Training DataFrame with 'Summary' and 'Truth' columns
@@ -64,11 +124,20 @@ class SVM:
         if len(df) == 0:
             raise ValueError("Training dataframe is empty.")
 
-        print(f"Training Linear SVM on {len(df)} samples...")
+        print(f"Training Fuzzy SVM (min_membership={self.min_membership}) on {len(df)} samples...")
         
         # Embed training data once
         X_train = self._embed(df["Summary"])
         y_train = self._ensure_binary(df["Truth"])
+        
+        # Compute fuzzy memberships
+        print("Computing fuzzy memberships...")
+        memberships = self._compute_fuzzy_memberships(X_train, y_train, self.min_membership)
+        self.memberships_ = memberships  # Store for analysis
+        
+        # Print membership statistics
+        print(f"Membership stats: min={memberships.min():.3f}, "
+              f"max={memberships.max():.3f}, mean={memberships.mean():.3f}")
         
         # Embed validation data if provided
         X_val, y_val = None, None
@@ -81,7 +150,7 @@ class SVM:
         
         # Progressive training: train on increasing subsets (for visualization)
         if val_df is not None:
-            n_epochs = 5  # Reduced from 10 for faster training
+            n_epochs = 5
             for epoch in range(1, n_epochs + 1):
                 # Use progressively more training data
                 subset_size = int(len(X_train) * (epoch / n_epochs))
@@ -89,10 +158,11 @@ class SVM:
                 
                 X_subset = X_train[:subset_size]
                 y_subset = y_train[:subset_size]
+                memberships_subset = memberships[:subset_size]
                 
-                # Train fresh model on subset
+                # Train fresh model on subset with fuzzy weights
                 self.model = LinearSVC(random_state=self.random_state, dual="auto", max_iter=5000)
-                self.model.fit(X_subset, y_subset)
+                self.model.fit(X_subset, y_subset, sample_weight=memberships_subset)
                 
                 # Evaluate on validation set
                 y_pred = self.model.predict(X_val)
@@ -109,17 +179,26 @@ class SVM:
                 print(f"Epoch {epoch}/{n_epochs} ({subset_size} samples) - "
                       f"Val Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
         
-        # Final training on full dataset
+        # Final training on full dataset with fuzzy weights
         self.model = LinearSVC(random_state=self.random_state, dual="auto", max_iter=5000)
-        self.model.fit(X_train, y_train)
+        self.model.fit(X_train, y_train, sample_weight=memberships)
         self._is_fitted = True
-        print("Linear SVM training complete.")
+        print("Fuzzy SVM training complete.")
         
         # Save training graph if validation was used
         if val_df is not None and len(self.training_history["epoch"]) > 0:
             self._save_training_graph()
 
     def predict(self, eval_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate predictions for the evaluation dataset.
+        
+        Args:
+            eval_df: DataFrame with 'Summary' and 'Truth' columns
+            
+        Returns:
+            DataFrame with 'Prediction' and 'Truth' columns
+        """
         if not self._is_fitted:
             raise RuntimeError("Model is not fitted. Call train() first.")
         
@@ -143,28 +222,37 @@ class SVM:
             index=eval_df.index,
         )
 
-    def decision_scores(self, eval_df: pd.DataFrame) -> np.ndarray:
+    def get_membership_distribution(self) -> dict:
         """
-        Returns signed distance to the decision boundary for each row
-        (useful as a confidence score; larger magnitude = more confident).
+        Get statistics about the fuzzy memberships computed during training.
+        
+        Returns:
+            Dictionary with membership statistics
         """
-        if "Summary" not in eval_df:
-            raise KeyError("eval_df must contain 'Summary' column.")
-        X = self._embed(eval_df["Summary"])
-        return self.model.decision_function(X)
+        if self.memberships_ is None:
+            raise RuntimeError("Model must be trained first to access memberships.")
+        
+        return {
+            "min": float(self.memberships_.min()),
+            "max": float(self.memberships_.max()),
+            "mean": float(self.memberships_.mean()),
+            "std": float(self.memberships_.std()),
+            "median": float(np.median(self.memberships_)),
+        }
 
     def _save_training_graph(self) -> None:
         """
         Save training history graph showing validation metrics per epoch.
-        Graph is saved to ./output/svm/training_history.png
+        Graph is saved to ./output/svm_fuzzy/training_history.png
         """
-        output_dir = os.path.join("output", "svm")
+        output_dir = os.path.join("output", "svm_fuzzy")
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, "training_history.png")
         
         # Create figure with 3 subplots
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        fig.suptitle("Linear SVM Training: Validation Performance per Epoch", fontsize=14, fontweight="bold")
+        fig.suptitle(f"Fuzzy SVM Training (min_membership={self.min_membership}): Validation Performance per Epoch", 
+                     fontsize=14, fontweight="bold")
         
         epochs = self.training_history["epoch"]
         
@@ -197,3 +285,7 @@ class SVM:
         plt.close()
         
         print(f"📊 Saved training history graph to {output_path}")
+
+    def __repr__(self):
+        return f"SVM_Fuzzy(min_membership={self.min_membership})"
+
