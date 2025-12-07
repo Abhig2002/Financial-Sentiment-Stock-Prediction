@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from typing import Optional
 
@@ -8,9 +9,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics import f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader, TensorDataset
+
+# Add parent directory to path to import embeddings module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from embeddings import get_embedder
 
 
 class CNNModel(nn.Module):
@@ -72,7 +76,7 @@ class CNN:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        embedding_backend: str = "finbert",
         num_filters: int = 128,
         dropout: float = 0.5,
         learning_rate: float = 0.001,
@@ -81,10 +85,10 @@ class CNN:
         random_state: int = 42,
     ):
         """
-        Initialize the CNN classifier with SentenceTransformer embeddings.
+        Initialize the CNN classifier with embeddings.
 
         Args:
-            model_name: Name of the SentenceTransformer model for text embeddings
+            embedding_backend: 'finbert' or 'minilm' for text embeddings
             num_filters: Number of filters per convolutional layer
             dropout: Dropout rate for regularization
             learning_rate: Learning rate for optimizer
@@ -92,7 +96,8 @@ class CNN:
             epochs: Number of training epochs
             random_state: Random seed for reproducibility
         """
-        self.encoder = SentenceTransformer(model_name)
+        self.embedding_backend = embedding_backend
+        self.encoder = get_embedder(model_name=embedding_backend)
         self.num_filters = num_filters
         self.dropout = dropout
         self.learning_rate = learning_rate
@@ -132,7 +137,8 @@ class CNN:
         """Convert text summaries to dense embeddings."""
         return self.encoder.encode(
             texts.astype(str).tolist(),
-            show_progress_bar=False,
+            batch_size=32,
+            show_progress=False,
             normalize_embeddings=True,
         )
 

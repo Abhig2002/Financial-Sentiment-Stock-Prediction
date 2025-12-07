@@ -6,15 +6,22 @@ import seaborn as sns
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
 
-def load_data(data_path):
+def load_data(data_path, task_type="1d"):
     """
     Creates a dataframe of data from the datapath.
+    
+    Args:
+        data_path: Path to directory containing CSV files
+        task_type: Either '1d' (1-day prediction) or '5d' (5-day prediction)
 
-    Returns a dataframe with the following columns: ["Date", "Open", "Low", "Close", "Adj close", "Summary", "Truth"]
+    Returns a dataframe with the following columns: 
+        ["Date", "Open", "Low", "Close", "Adj close", "Summary", "Truth", "Ticker"]
+        
+    Note: 'Truth' column will contain either label_1d or label_5d depending on task_type
     """
 
     full_df = pd.DataFrame(
-        columns=["Date", "Open", "Low", "Close", "Adj close", "Summary", "Truth"]
+        columns=["Date", "Open", "Low", "Close", "Adj close", "Summary", "Ticker"]
     )
     for file in os.listdir(data_path):
         full_path = os.path.join(data_path, file)
@@ -24,10 +31,12 @@ def load_data(data_path):
                 df = df.rename(columns={"Lexrank_summary": "Summary"})
                 df = df[df["News_flag"] == 1]
 
-                df["Truth"] = (df["Open"] <= df["Close"]).astype(int)
+                # Extract ticker from filename (e.g., "AAPL.csv" -> "AAPL")
+                ticker = os.path.splitext(file)[0]
+                df["Ticker"] = ticker
 
                 df = df[
-                    ["Date", "Open", "Low", "Close", "Adj close", "Summary", "Truth"]
+                    ["Date", "Open", "Low", "Close", "Adj close", "Summary", "Ticker"]
                 ]
 
                 full_df = pd.concat([full_df, df], ignore_index=True)
@@ -37,10 +46,40 @@ def load_data(data_path):
 
             print("Read in ", full_path)
 
+    # Sort by Ticker and Date for proper 5-day calculation
+    full_df["Date"] = pd.to_datetime(full_df["Date"])
+    full_df = full_df.sort_values(["Ticker", "Date"]).reset_index(drop=True)
+    
+    # Create 1-day label (existing behavior)
+    full_df["label_1d"] = (full_df["Open"] <= full_df["Close"]).astype(int)
+    
+    # Create 5-day label (new feature)
+    full_df["Close_t_plus_5"] = full_df.groupby("Ticker")["Close"].shift(-5)
+    full_df["ret_5d"] = (full_df["Close_t_plus_5"] - full_df["Close"]) / full_df["Close"]
+    
+    # For 5-day prediction, drop rows without future data
+    if task_type == "5d":
+        original_len = len(full_df)
+        full_df = full_df.dropna(subset=["Close_t_plus_5"])
+        dropped = original_len - len(full_df)
+        print(f"ℹ️  Dropped {dropped} rows without 5-day forward data (keeping {len(full_df)} rows)")
+    
+    full_df["label_5d"] = (full_df["ret_5d"] >= 0).astype(int)
+    
+    # Set 'Truth' column based on task type
+    if task_type == "1d":
+        full_df["Truth"] = full_df["label_1d"]
+        print(f"✅ Using 1-day labels: predicting if Close >= Open")
+    elif task_type == "5d":
+        full_df["Truth"] = full_df["label_5d"]
+        print(f"✅ Using 5-day labels: predicting if 5-day return >= 0")
+    else:
+        raise ValueError(f"Unknown task_type: {task_type}. Choose '1d' or '5d'.")
+    
     return full_df
 
 
-def evaluate(exp_name: str, predictions: pd.DataFrame):
+def evaluate(exp_name: str, predictions: pd.DataFrame, task_type: str = "1d"):
     """
     Evaluate binary classification predictions and save results.
 
@@ -48,10 +87,11 @@ def evaluate(exp_name: str, predictions: pd.DataFrame):
         exp_name: Name of the experiment. Results are saved in ./output/{exp_name}/
         predictions: DataFrame with columns ['Prediction', 'Truth'] or ['prediction', 'truth'] (case-insensitive).
                      Each column should contain 0/1 values.
+        task_type: Either '1d' or '5d' - used in filenames for tracking
     
     Outputs:
-        - metrics.csv: Precision, Recall, F1 Score
-        - confusion_matrix.png: Confusion matrix visualization
+        - metrics_{task_type}.csv: Precision, Recall, F1 Score
+        - confusion_matrix_{task_type}.png: Confusion matrix visualization
     """
     # Normalize column names
     cols = {c.lower(): c for c in predictions.columns}
@@ -81,13 +121,13 @@ def evaluate(exp_name: str, predictions: pd.DataFrame):
     output_dir = os.path.join("output", exp_name)
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save metrics CSV
-    metrics_path = os.path.join(output_dir, "metrics.csv")
+    # Save metrics CSV (with task_type in filename)
+    metrics_path = os.path.join(output_dir, f"metrics_{task_type}.csv")
     pd.DataFrame([results]).to_csv(metrics_path, index=False)
 
-    # Save confusion matrix visualization
-    cm_path = os.path.join(output_dir, "confusion_matrix.png")
-    _save_confusion_matrix(cm, y_true, y_pred, cm_path, exp_name)
+    # Save confusion matrix visualization (with task_type in filename)
+    cm_path = os.path.join(output_dir, f"confusion_matrix_{task_type}.png")
+    _save_confusion_matrix(cm, y_true, y_pred, cm_path, f"{exp_name} ({task_type})")
 
     print(f"✅ Saved evaluation metrics to {metrics_path}")
     print(f"📊 Saved confusion matrix to {cm_path}")

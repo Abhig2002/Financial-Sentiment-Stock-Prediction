@@ -1,11 +1,15 @@
 from typing import Optional
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.svm import LinearSVC
 from sklearn.metrics import precision_score, recall_score, f1_score
-from sentence_transformers import SentenceTransformer
+
+# Add parent directory to path to import embeddings module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from embeddings import get_embedder
 
 
 class SVM:
@@ -14,8 +18,9 @@ class SVM:
     Expects dataframes with columns: 'Summary' (str), 'Truth' (0 or 1).
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", random_state: int = 42):
-        self.encoder = SentenceTransformer(model_name)
+    def __init__(self, embedding_backend: str = "finbert", random_state: int = 42):
+        self.embedding_backend = embedding_backend
+        self.encoder = get_embedder(model_name=embedding_backend)
         self.random_state = random_state
         # LinearSVC is fast and works well on dense embeddings.
         self.model = LinearSVC(random_state=random_state, dual="auto")
@@ -38,10 +43,11 @@ class SVM:
         return y_arr
 
     def _embed(self, texts: pd.Series) -> np.ndarray:
-        # normalize_embeddings=True often helps linear models on SBERT vectors
+        # normalize_embeddings=True often helps linear models
         return self.encoder.encode(
             texts.astype(str).tolist(),
-            show_progress_bar=False,
+            batch_size=32,
+            show_progress=False,
             normalize_embeddings=True,
         )
 

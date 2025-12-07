@@ -16,4 +16,15 @@ source activate tfenv
 
 cd /scratch/mgrohols/575/financial-sentiment
 
-python3 main.py -d ./data_utils/price_news_integrate -p lstm -r 3
+# Example: Run LSTM with FinBERT embeddings on 1-day prediction task
+python3 main.py -d ./data_utils/price_news_integrate -p lstm -r 3 -t 1d -e finbert
+
+# Other examples (uncomment to use):
+# Run Random Forest with FinBERT on 5-day task
+# python3 main.py -d ./data_utils/price_news_integrate -p randomforest -r 3 -t 5d -e finbert
+
+# Run all models with FinBERT on 1-day task
+# python3 main.py -d ./data_utils/price_news_integrate -p all -r 1 -t 1d -e finbert
+
+# Compare MiniLM baseline
+# python3 main.py -d ./data_utils/price_news_integrate -p lstm -r 3 -t 1d -e minilm

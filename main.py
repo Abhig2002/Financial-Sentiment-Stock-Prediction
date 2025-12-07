@@ -8,8 +8,8 @@ from data_integ import evaluate, load_data
 from lstm.lstm import LSTM
 from randomforest.randomforest import RandomForest
 from svm.svm import SVM
-from svm.svm_rbf import SVM_RBF
-from svm.svm_fuzzy import SVM_Fuzzy
+# from svm.svm_rbf import SVM_RBF
+# from svm.svm_fuzzy import SVM_Fuzzy
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -17,19 +17,21 @@ VAL_RATIO = 0.15
 
 def main(args):
     data_path = args.data
+    task_type = args.task_type
+    embedding_backend = args.embedding_backend
 
-    print(f"Loading data from {data_path}.")
-    dataset = load_data(data_path)
-    print(f"Loaded data from {data_path}.")
+    print(f"Loading data from {data_path} for task: {task_type}")
+    dataset = load_data(data_path, task_type=task_type)
+    print(f"Loaded {len(dataset)} samples from {data_path}.")
 
     models = []
     pipeline = args.pipeline
     if pipeline == "svm" or pipeline == "all":
         models.append(("svm", SVM))
-    if pipeline == "svm_rbf" or pipeline == "all":
-        models.append(("svm_rbf", SVM_RBF))
-    if pipeline == "svm_fuzzy" or pipeline == "all":
-        models.append(("svm_fuzzy", SVM_Fuzzy))
+    # if pipeline == "svm_rbf" or pipeline == "all":
+    #     models.append(("svm_rbf", SVM_RBF))
+    # if pipeline == "svm_fuzzy" or pipeline == "all":
+    #     models.append(("svm_fuzzy", SVM_Fuzzy))
     if pipeline == "cnn" or pipeline == "all":
         models.append(("cnn", CNN))
     if pipeline == "lstm" or pipeline == "all":
@@ -53,13 +55,13 @@ def main(args):
 
     for name, modelClass in models:
         for run in range(args.runs):
-            model = modelClass()
-            print(f"Starting training run {run} for {name}.")
+            model = modelClass(embedding_backend=embedding_backend)
+            print(f"Starting training run {run + 1} for {name} with {embedding_backend} embeddings.")
             model.train(train_df, val_df)
 
-            print(f"Starting prediction run {run} for {name}.")
+            print(f"Starting prediction run {run + 1} for {name}.")
             results = model.predict(test_df)
-            evaluate(f"{name}-run{run + 1}", results)
+            evaluate(f"{name}-{embedding_backend}-{task_type}-run{run + 1}", results, task_type=task_type)
 
             del model
             gc.collect()
@@ -74,7 +76,7 @@ def parse_args():
         "-p",
         "--pipeline",
         required=True,
-        choices=["svm", "svm_rbf", "svm_fuzzy", "cnn", "lstm", "randomforest", "all"],
+        choices=["svm", "cnn", "lstm", "randomforest", "all"],  # "svm_rbf", "svm_fuzzy" commented out
         help="Select which pipeline to run.",
     )
 
@@ -92,6 +94,23 @@ def parse_args():
         type=int,
         help="Number of runs to execute for each pipeline.",
     )
+    
+    parser.add_argument(
+        "-t",
+        "--task_type",
+        default="1d",
+        choices=["1d", "5d"],
+        help="Prediction task: '1d' (1-day, Close>=Open) or '5d' (5-day forward return>=0). Default: 1d",
+    )
+    
+    parser.add_argument(
+        "-e",
+        "--embedding_backend",
+        default="finbert",
+        choices=["finbert", "minilm"],
+        help="Embedding model: 'finbert' (finance-specific) or 'minilm' (general-purpose). Default: finbert",
+    )
+    
     return parser.parse_args()
 
 

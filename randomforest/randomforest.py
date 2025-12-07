@@ -1,11 +1,15 @@
 from typing import Optional
 import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score, recall_score, f1_score
-from sentence_transformers import SentenceTransformer
+
+# Add parent directory to path to import embeddings module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from embeddings import get_embedder
 
 
 class RandomForest:
@@ -16,23 +20,24 @@ class RandomForest:
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        embedding_backend: str = "finbert",
         n_estimators: int = 100,
         max_depth: Optional[int] = None,
         random_state: int = 42,
         trees_per_epoch: int = 10,
     ):
         """
-        Initialize the RandomForest classifier with SentenceTransformer embeddings.
+        Initialize the RandomForest classifier with embeddings.
         
         Args:
-            model_name: Name of the SentenceTransformer model for text embeddings
+            embedding_backend: 'finbert' or 'minilm' for text embeddings
             n_estimators: Number of trees in the forest
             max_depth: Maximum depth of each tree (None means unlimited)
             random_state: Random seed for reproducibility
             trees_per_epoch: Number of trees to add per "epoch" for incremental training
         """
-        self.encoder = SentenceTransformer(model_name)
+        self.embedding_backend = embedding_backend
+        self.encoder = get_embedder(model_name=embedding_backend)
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.random_state = random_state
@@ -62,7 +67,8 @@ class RandomForest:
         # normalize_embeddings=True helps with consistent feature scales
         return self.encoder.encode(
             texts.astype(str).tolist(),
-            show_progress_bar=False,
+            batch_size=32,
+            show_progress=False,
             normalize_embeddings=True,
         )
 
@@ -134,6 +140,9 @@ class RandomForest:
         self._is_fitted = True
         print("RandomForest training complete.")
         
+        # Save model and embeddings for SHAP analysis
+        self._save_model_artifacts(X_train, y_train)
+        
         # Save training graph if validation was used
         if val_df is not None and len(self.training_history["epoch"]) > 0:
             self._save_training_graph()
@@ -202,6 +211,28 @@ class RandomForest:
         
         return self.model.feature_importances_
 
+    def _save_model_artifacts(self, X_train: np.ndarray, y_train: np.ndarray) -> None:
+        """
+        Save model and training data for SHAP analysis.
+        Saves to ./output/randomforest/artifacts/
+        """
+        import joblib
+        
+        artifacts_dir = os.path.join("output", "randomforest", "artifacts")
+        os.makedirs(artifacts_dir, exist_ok=True)
+        
+        # Save model
+        model_path = os.path.join(artifacts_dir, f"rf_model_{self.embedding_backend}.joblib")
+        joblib.dump(self.model, model_path)
+        
+        # Save embeddings and labels
+        X_path = os.path.join(artifacts_dir, f"X_train_{self.embedding_backend}.npy")
+        y_path = os.path.join(artifacts_dir, f"y_train_{self.embedding_backend}.npy")
+        np.save(X_path, X_train)
+        np.save(y_path, y_train)
+        
+        print(f"💾 Saved model artifacts to {artifacts_dir}/")
+    
     def _save_training_graph(self) -> None:
         """
         Save training history graph showing validation metrics per epoch.

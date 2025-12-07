@@ -124,3 +124,5 @@ wrapt==1.14.2
 wsproto==1.2.0
 yarl==1.22.0
 yfinance==0.2.66
+shap==0.46.0
+accelerate==1.4.0
